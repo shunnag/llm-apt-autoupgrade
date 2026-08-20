@@ -1,0 +1,17 @@
+[Unit]
+Description=Run aptai daily
+Documentation=https://github.com/shunnag/llm-apt-autoupgrade
+
+[Timer]
+# Every day in the early morning, spread over an hour so that a fleet does not
+# hit the mirrors -- or the Claude API -- at the same second.
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=3600
+
+# Catch up after the machine was switched off at the scheduled time.
+Persistent=true
+
+Unit=aptai.service
+
+[Install]
+WantedBy=timers.target

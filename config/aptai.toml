@@ -1,0 +1,147 @@
+# aptai configuration -- /etc/aptai/config.toml
+#
+# Every value below is a default; delete a line to keep the built-in default.
+# Unknown keys are a hard error, so a typo in a safety limit can never be
+# silently ignored.  Run `aptai show-config` to print what is actually in
+# effect and `aptai show-policy` to see the limits in force.
+
+[general]
+# "auto"    -- execute the advisor's actions that survive the local policy
+# "suggest" -- report them and stop without changing anything
+mode = "auto"
+
+# Advisor rounds per failed stage: attempt -> consult -> remediate -> retry.
+max_rounds = 3
+
+# Simulate everything; never change the system.
+dry_run = false
+
+log_dir = "/var/log/aptai"
+state_dir = "/var/lib/aptai"
+log_level = "INFO"
+keep_reports = 30
+
+[apt]
+update = true
+full_upgrade = true
+autoremove = true
+autoremove_purge = false
+autoclean = false
+
+# Seconds allowed for a single apt/dpkg invocation.
+command_timeout = 3600
+
+# unattended-upgrades ships enabled on Ubuntu, so finding the dpkg lock held
+# is normal.  aptai waits for it; it never deletes a lock file.
+lock_wait_seconds = 900
+lock_poll_seconds = 20
+
+# Preflight refuses to start below these thresholds.  A full /boot is the most
+# common cause of a failed kernel upgrade.
+min_free_root_mb = 512
+min_free_var_mb = 1024
+min_free_boot_mb = 120
+
+# needrestart runs on Ubuntu during upgrades: "l" only lists the services that
+# need restarting, "a" restarts them automatically, "off" disables it.
+needrestart_mode = "l"
+
+# What to do when apt's own simulation of full-upgrade wants to remove more
+# than max_upgrade_removals packages:
+#   "abort"            -- stop and ask the advisor (default)
+#   "fallback_upgrade" -- run `apt-get upgrade --with-new-pkgs`, which removes nothing
+#   "proceed"          -- do it anyway (protected packages are still refused)
+on_excessive_removals = "abort"
+max_upgrade_removals = 10
+max_autoremove_removals = 60
+
+# Reboot automatically when /var/run/reboot-required appears.  Off by default.
+reboot_if_required = false
+
+[llm]
+enabled = true
+base_url = "https://api.anthropic.com"
+model = "claude-opus-5"
+api_version = "2023-06-01"
+
+# The key is read from this environment variable first (systemd loads
+# /etc/aptai/env), then from api_key_file, which must be mode 0600.
+api_key_env = "ANTHROPIC_API_KEY"
+api_key_file = "/etc/aptai/api_key"
+
+max_tokens = 16000
+effort = "high"          # low | medium | high | xhigh | max
+timeout = 300
+max_retries = 4
+
+# Optional request features.  If a future API change rejects one of these,
+# turn it off here instead of patching the code; aptai also retries once
+# automatically with all of them disabled after a 400.
+use_effort = true
+use_structured_output = true
+use_refusal_fallbacks = true
+fallback_beta = "server-side-fallback-2026-07-01"
+
+[policy]
+# Nothing the model proposes reaches the system without passing these.
+max_actions_per_round = 6
+max_risk = "medium"        # low | medium | high
+max_removals = 5
+
+allow_remove = true
+allow_purge = false
+allow_hold_changes = true
+allow_apt_lists_reset = true
+
+# Off by default: these two are the only actions that can change what this
+# machine trusts or where it fetches packages from.  Read SECURITY.md before
+# enabling either.
+allow_sources_edit = false
+allow_key_import = false
+
+# Version pinning can silently downgrade a package.
+allow_downgrade = false
+
+# Essential packages and the running kernel are always protected; this adds
+# Priority: required/important on top.
+protect_required_priority = true
+
+protected_packages = [
+  "apt", "base-files", "bash", "coreutils", "dash", "dpkg",
+  "grub-common", "grub-efi-amd64", "grub-pc", "init",
+  "libc-bin", "libc6", "login", "openssh-server", "passwd",
+  "perl-base", "python3", "python3-minimal", "shim-signed",
+  "sudo", "systemd", "systemd-sysv", "udev",
+]
+
+allowed_keyservers = ["keyserver.ubuntu.com"]
+
+[privacy]
+# Run `aptai diagnose` to print exactly what would be uploaded.
+redact = true
+send_sources_list = true
+send_package_list = false
+dpkg_log_lines = 120
+max_payload_chars = 60000
+
+[notify]
+enabled = true
+on_success = false
+on_failure = true
+on_reboot_required = true
+timeout = 30
+max_log_chars = 3000
+
+[notify.slack]
+# Either put the URL here, point webhook_url_file at a 0600 file, or export
+# APTAI_SLACK_WEBHOOK in /etc/aptai/env.
+webhook_url = ""
+webhook_url_file = ""
+username = "aptai"
+icon_emoji = ":package:"
+
+[notify.mattermost]
+webhook_url = ""
+webhook_url_file = ""
+channel = ""
+username = "aptai"

@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Never commit anything key-shaped.
+*.pem
+*.key
+api_key
+env
+.env
+*.local.toml
+config.local.toml
+
+# Local run artefacts
+run-*.json
+aptai.log*
+.coverage
+htmlcov/

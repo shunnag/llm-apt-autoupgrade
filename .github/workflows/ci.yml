@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor (tomllib); 3.12 ships on Ubuntu 24.04 and 3.13 on
+        # Debian 13, which are the targets.
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: no third-party imports
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+          allowed = set(sys.stdlib_module_names) | {"aptai", "tests"}
+          bad = []
+          for path in pathlib.Path("aptai").rglob("*.py"):
+              tree = ast.parse(path.read_text(), str(path))
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      names = [a.name for a in node.names]
+                  elif isinstance(node, ast.ImportFrom):
+                      names = [node.module or ""]
+                  else:
+                      continue
+                  for name in names:
+                      root = name.split(".")[0]
+                      if root and root not in allowed:
+                          bad.append(f"{path}: {name}")
+          if bad:
+              print("third-party imports found:"); print("\n".join(bad)); raise SystemExit(1)
+          print("stdlib only: ok")
+          PY
+      - name: byte-compile
+        run: python -m compileall -q aptai tests
+      - name: unit tests
+        run: python -m unittest discover -s tests -t . -v
+
+  shell:
+    name: shell and unit files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/*.sh
+      - name: systemd unit syntax
+        run: systemd-analyze verify systemd/aptai.service systemd/aptai.timer || true
+      - name: config parses
+        run: python3 -c "import tomllib; tomllib.load(open('config/aptai.toml','rb')); print('ok')"
+
+  install:
+    name: end-to-end install on ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "debian:trixie"]
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq python3 ca-certificates
+      - uses: actions/checkout@v4
+      - name: install
+        run: ./scripts/install.sh
+      - name: smoke test
+        run: |
+          /usr/local/bin/aptai --version
+          /usr/local/bin/aptai show-policy
+          /usr/local/bin/aptai --config /etc/aptai/config.toml run --dry-run --no-llm || true
+      - name: uninstall
+        run: ./scripts/uninstall.sh --purge

@@ -1,0 +1,42 @@
+[Unit]
+Description=aptai - LLM-assisted APT upgrade
+Documentation=https://github.com/shunnag/llm-apt-autoupgrade
+After=network-online.target
+Wants=network-online.target
+# Do not fight the distribution's own unattended upgrade jobs for the dpkg
+# lock. aptai waits for the lock anyway, but starting after them is cheaper.
+After=apt-daily.service apt-daily-upgrade.service
+ConditionPathExists=/etc/aptai/config.toml
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/aptai --config /etc/aptai/config.toml run
+
+# ANTHROPIC_API_KEY and the webhook URLs live here (mode 0600, root-owned).
+# The leading '-' makes the file optional so the unit still starts without it.
+EnvironmentFile=-/etc/aptai/env
+
+# An upgrade of a large server can legitimately take a long time; this bounds
+# it rather than letting a hung maintainer script block the machine forever.
+TimeoutStartSec=7200
+
+# Be a good citizen: package upgrades are not latency sensitive.
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+# Deliberately NOT hardened.
+#
+# ProtectSystem=, PrivateTmp=, ProtectHome=, ReadOnlyPaths= and friends break
+# dpkg: maintainer scripts write all over the filesystem, restart services and
+# expect the real /tmp. Adding those directives here would make upgrades fail
+# in ways that look like package bugs. If you need isolation, run aptai in a
+# VM or container, not behind a systemd sandbox.
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aptai
+
+[Install]
+WantedBy=multi-user.target
