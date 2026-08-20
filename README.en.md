@@ -264,7 +264,7 @@ allow_key_import = false
 ## Development
 
 ```bash
-make test     # 230 unit tests; no network, no root, no apt required
+make test     # 238 unit tests; no network, no root, no apt required
 make lint     # byte-compile + shellcheck + systemd-analyze verify
 make check    # both
 make dry-run  # a harmless local run

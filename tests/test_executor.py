@@ -294,3 +294,30 @@ class TestTabSeparatedSources(unittest.TestCase):
         content = "# deb https://broken.example.com/apt stable main\n"
         _, changed = _comment_out_uri(content, "https://broken.example.com/apt")
         self.assertFalse(changed)
+
+
+class TestArgvRejectionEscalates(unittest.TestCase):
+    """If a bad name ever reaches the executor, it must escalate, not crash."""
+
+    def test_an_invalid_name_becomes_a_failed_result(self):
+        from aptai.plan import Action, ActionKind
+
+        config = make_config()
+        executor = Executor(config, Policy(config, make_facts()), dry_run=True)
+        # Bypasses the policy on purpose: this is the defence-in-depth path.
+        bad = Action(kind=ActionKind.APT_INSTALL, reason="r", risk="low", packages=["ufw-"])
+        result = executor.execute(bad)
+        self.assertFalse(result.success)
+        self.assertTrue(result.aborted_by_policy)
+        self.assertIn("refused while building the command", result.message)
+
+    def test_an_invalid_mark_target_becomes_a_failed_result(self):
+        from aptai.plan import Action, ActionKind
+
+        config = make_config()
+        executor = Executor(config, Policy(config, make_facts()), dry_run=False)
+        bad = Action(kind=ActionKind.APT_MARK, reason="r", risk="low",
+                     mark="hold", packages=["linux-image."])
+        result = executor.execute(bad)
+        self.assertFalse(result.success)
+        self.assertIn("refused while building the command", result.message)

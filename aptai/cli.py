@@ -89,11 +89,13 @@ def main(argv: list[str] | None = None) -> int:
     config_path = args.config if (explicit or os.path.exists(args.config)) else None
     try:
         config = load_config(config_path)
+        # Inside the try: _apply_overrides re-validates, so a bad --max-rounds
+        # has to report itself the same way a bad config file does.
+        _apply_overrides(config, args)
     except ConfigError as exc:
         print(f"aptai: {exc}", file=sys.stderr)
         return exc.exit_code
 
-    _apply_overrides(config, args)
     log_path = setup_logging(
         config.general.log_dir if command == "run" else "",
         config.general.log_level,

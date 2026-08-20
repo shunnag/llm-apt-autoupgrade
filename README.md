@@ -312,7 +312,7 @@ allow_key_import = false
 ## 開発
 
 ```bash
-make test     # 230 件のユニットテスト（ネットワーク・root・apt すべて不要）
+make test     # 238 件のユニットテスト（ネットワーク・root・apt すべて不要）
 make lint     # バイトコンパイル + shellcheck + systemd-analyze verify
 make check    # lint + test
 make dry-run  # ローカル設定で無害な実行

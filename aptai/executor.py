@@ -312,7 +312,17 @@ class Executor:
         if handler is None:
             return OperationResult(name=action.kind.value, message="no implementation for this action")
         LOG.info("action: %s", action.describe())
-        return handler(action)
+        try:
+            return handler(action)
+        except ValueError as exc:
+            # aptcmd re-validates every argument, so this only fires when the
+            # policy let something through. Escalating is the correct outcome;
+            # crashing mid-upgrade is not.
+            LOG.error("refusing to run %s: %s", action.kind.value, exc)
+            return OperationResult(
+                name=action.kind.value, aborted_by_policy=True,
+                message=f"{action.kind.value} was refused while building the command: {exc}",
+            )
 
     def _do_install(self, action: Action) -> OperationResult:
         # removal_limit=0: an install that turns into a removal is either apt

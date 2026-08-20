@@ -142,6 +142,22 @@ class Policy:
             result.escalation_reason = f"unknown stage {stage!r}"
             return result
 
+        # Escalation is decided before every other gate. It is never risky and
+        # is never one of the actions being budgeted, so letting max_risk or
+        # max_actions_per_round drop it would silently turn "a human must look
+        # at this" into "run the other actions listed beside it".
+        for index, action in enumerate(plan.actions):
+            if action.kind is not ActionKind.ESCALATE:
+                continue
+            result.escalate = True
+            result.escalation_reason = (
+                action.reason or plan.escalation_reason or "the advisor asked for human intervention"
+            )
+            for other in plan.actions:
+                if other is not action:
+                    result.rejected.append(Rejection(other, "the plan also asked to escalate"))
+            return result
+
         seen = set(previous_signatures or ())
         budget = self.config.policy.max_actions_per_round
         removal_budget = self.config.policy.max_removals
@@ -170,15 +186,6 @@ class Policy:
             if reason is not None:
                 result.rejected.append(Rejection(action, reason))
                 continue
-            if action.kind is ActionKind.ESCALATE:
-                # An escalate action means the same thing as the plan-level
-                # flag: stop here. Running the actions listed beside it would
-                # be acting on a plan the model itself said needs a human.
-                result.escalate = True
-                result.escalation_reason = action.reason or "the advisor asked for human intervention"
-                for later in plan.actions[plan.actions.index(action) + 1:]:
-                    result.rejected.append(Rejection(later, "an earlier action escalated"))
-                return result
             result.accepted.append(action)
 
         if not result.accepted and result.rejected and not result.escalate:

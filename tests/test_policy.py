@@ -490,3 +490,53 @@ class TestEscalateAction(PolicyTestCase):
         )
         self.assertTrue(result.escalate)
         self.assertEqual([], result.accepted)
+
+
+class TestEscalateIsDecidedFirst(PolicyTestCase):
+    """No local limit may drop an escalation and run its siblings instead."""
+
+    def test_a_high_risk_escalate_still_escalates(self):
+        # Escalating feels high-risk to a model, and max_risk defaults to
+        # medium -- so this is the plan shape that must not lose the escalate.
+        result = self.policy.review(
+            plan(
+                action(ActionKind.ESCALATE, reason="the disk is failing", risk="high"),
+                action(ActionKind.APT_REMOVE, packages=["nginx"]),
+            ),
+            "full_upgrade",
+        )
+        self.assertTrue(result.escalate)
+        self.assertEqual("the disk is failing", result.escalation_reason)
+        self.assertEqual([], result.accepted)
+
+    def test_an_escalate_past_the_action_budget_still_escalates(self):
+        self.config.policy.max_actions_per_round = 2
+        self.policy = Policy(self.config, self.facts)
+        result = self.policy.review(
+            plan(
+                action(ActionKind.DPKG_AUDIT),
+                action(ActionKind.APT_CLEAN),
+                action(ActionKind.APT_AUTOCLEAN),
+                action(ActionKind.ESCALATE, reason="out of ideas"),
+            ),
+            "full_upgrade",
+        )
+        self.assertTrue(result.escalate)
+        self.assertEqual("out of ideas", result.escalation_reason)
+        self.assertEqual([], result.accepted)
+
+    def test_an_escalate_in_the_wrong_stage_vocabulary_still_escalates(self):
+        result = self.policy.review(
+            plan(action(ActionKind.ESCALATE, reason="needs a reboot")), "autoclean"
+        )
+        self.assertTrue(result.escalate)
+
+    def test_identical_actions_are_all_recorded_as_rejected(self):
+        # Two equal dataclass instances must not be confused for each other.
+        first = action(ActionKind.APT_CLEAN)
+        second = action(ActionKind.APT_CLEAN)
+        result = self.policy.review(
+            plan(first, action(ActionKind.ESCALATE, reason="stop"), second), "full_upgrade"
+        )
+        self.assertTrue(result.escalate)
+        self.assertEqual(2, len(result.rejected))

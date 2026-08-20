@@ -183,3 +183,29 @@ class TestCommandLineOverrides(unittest.TestCase):
         config = Config()
         _apply_overrides(config, args)
         self.assertTrue(config.general.dry_run)
+
+
+class TestCliEntryPoint(unittest.TestCase):
+    """A bad override must report itself the way a bad config file does."""
+
+    def test_invalid_max_rounds_exits_cleanly(self):
+        import io
+        import contextlib
+        from aptai.cli import main
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = main(["--config", "config/aptai.toml", "run", "--max-rounds", "500"])
+        self.assertEqual(2, code)
+        self.assertIn("max_rounds", stderr.getvalue())
+
+    def test_version_is_reported(self):
+        import io
+        import contextlib
+        from aptai.cli import main
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as ctx:
+            main(["--version"])
+        self.assertEqual(0, ctx.exception.code)
+        self.assertIn("aptai", stdout.getvalue())

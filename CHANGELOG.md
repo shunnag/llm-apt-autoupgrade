@@ -43,7 +43,7 @@ First release.
   success, so a stale security index is never upgraded against silently.
 - Secret-shaped environment variables are scrubbed from the environment handed
   to apt/dpkg maintainer scripts, and the on-disk run report is redacted.
-- 230 unit tests, most of them hostile-plan tests for the policy validator.
+- 238 unit tests, most of them hostile-plan tests for the policy validator.
 - CI on Python 3.11/3.12/3.13, a static stdlib-only import check, and
   install/uninstall smoke tests in `ubuntu:24.04` and `debian:trixie`.
 
