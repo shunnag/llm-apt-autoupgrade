@@ -47,7 +47,8 @@ _SUMMARY_RE = re.compile(
     r"^(\d+) upgraded, (\d+) newly installed, (?:(\d+) reinstalled, )?(?:(\d+) downgraded, )?"
     r"(\d+) to remove and (\d+) not upgraded\.?"
 )
-_REMV_RE = re.compile(r"^Remv\s+(\S+)")
+# apt prints "Purg" instead of "Remv" when a package is purged.
+_REMV_RE = re.compile(r"^(?:Remv|Purg)\s+(\S+)")
 _INST_RE = re.compile(r"^Inst\s+(\S+)")
 
 
@@ -108,8 +109,7 @@ def apt_packages_argv(
     """
     argv = base_apt_argv(subcommand, simulate=simulate, extra=extra)
     for package in packages or []:
-        if package.startswith("-"):
-            raise ValueError(f"refusing to pass option-like package name {package!r}")
+        _check_argument(package)
         argv.append(package)
     return argv
 
@@ -119,10 +119,24 @@ def apt_mark_argv(mark: str, packages: list[str]) -> list[str]:
         raise ValueError(f"unsupported apt-mark subcommand {mark!r}")
     argv = [APT_MARK, mark]
     for package in packages:
-        if package.startswith("-"):
-            raise ValueError(f"refusing to pass option-like package name {package!r}")
+        _check_argument(package)
         argv.append(package)
     return argv
+
+
+def _check_argument(package: str) -> None:
+    """Last gate before a name becomes argv.
+
+    Deliberately duplicates :data:`aptai.plan.PACKAGE_RE`: this module is the
+    only place that builds argv, so re-checking here keeps the guarantee even
+    if a future caller forgets to run the policy first. A leading ``-`` would
+    be read as an option and a trailing ``-``/``+`` as apt's own
+    remove/install selector.
+    """
+    from aptai.plan import PACKAGE_RE  # local import keeps this module leaf-level
+
+    if not isinstance(package, str) or not PACKAGE_RE.match(package):
+        raise ValueError(f"refusing to pass invalid package name {package!r}")
 
 
 def parse_simulation(output: str) -> Simulation:

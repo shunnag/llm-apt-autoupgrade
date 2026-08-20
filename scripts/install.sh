@@ -64,14 +64,16 @@ LAUNCHER
 chmod 0755 "$BINDIR/aptai"
 
 echo "creating $CONFDIR, $LOGDIR and $STATEDIR"
-install -d -m 0755 "$CONFDIR"
+# 0750/0640: config.toml may hold a Slack or Mattermost webhook URL, which is a
+# bearer credential, and the run reports under $LOGDIR quote apt output.
+install -d -m 0750 "$CONFDIR"
 install -d -m 0750 "$LOGDIR" "$STATEDIR"
 
 if [ -f "$CONFDIR/config.toml" ]; then
-    install -m 0644 "$SRC/config/aptai.toml" "$CONFDIR/config.toml.new"
+    install -m 0640 "$SRC/config/aptai.toml" "$CONFDIR/config.toml.new"
     echo "kept the existing $CONFDIR/config.toml (new version: $CONFDIR/config.toml.new)"
 else
-    install -m 0644 "$SRC/config/aptai.toml" "$CONFDIR/config.toml"
+    install -m 0640 "$SRC/config/aptai.toml" "$CONFDIR/config.toml"
     echo "wrote $CONFDIR/config.toml"
 fi
 

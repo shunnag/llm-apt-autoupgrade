@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 
 from aptai import aptcmd
@@ -101,9 +102,14 @@ class Executor:
         return result, aptcmd.parse_simulation(result.stdout + "\n" + result.stderr)
 
     def _review_simulation(
-        self, sim: aptcmd.Simulation, *, removal_limit: int
+        self, sim: aptcmd.Simulation, *, removal_limit: int, install_limit: int = -1
     ) -> str | None:
         """Return a refusal message when apt's own plan is unacceptable."""
+        if not sim.parsed_summary:
+            # apt-get -s always ends with "N upgraded, N newly installed, ...".
+            # Without it we did not understand the plan, and an unreadable plan
+            # must not be executed.
+            return "apt's simulation output could not be parsed, so its plan is unknown"
         hits = self.policy.protected_hits(sim.removals)
         if hits:
             listed = "; ".join(f"{name} ({why})" for name, why in hits[:6])
@@ -113,6 +119,11 @@ class Executor:
                 f"apt's plan removes {sim.removal_count} packages "
                 f"({', '.join(sim.removals[:10])}{'...' if sim.removal_count > 10 else ''}), "
                 f"over the configured limit of {removal_limit}"
+            )
+        if install_limit >= 0 and len(sim.new_installs) > install_limit:
+            return (
+                f"apt's plan installs {len(sim.new_installs)} new packages, over the "
+                f"configured limit of {install_limit}"
             )
         if sim.downgrades and not self.config.policy.allow_downgrade:
             return f"apt's plan downgrades {', '.join(sim.downgrades[:10])}"
@@ -125,6 +136,7 @@ class Executor:
         packages: list[str] | None = None,
         *,
         removal_limit: int,
+        install_limit: int = -1,
         extra: tuple[str, ...] = (),
     ) -> OperationResult:
         """Simulate, review, then run an apt-get subcommand."""
@@ -137,7 +149,9 @@ class Executor:
             out.message = f"{name}: apt-get -s {subcommand} failed, nothing was executed"
             return out
 
-        refusal = self._review_simulation(sim, removal_limit=removal_limit)
+        refusal = self._review_simulation(
+            sim, removal_limit=removal_limit, install_limit=install_limit
+        )
         if refusal:
             out.aborted_by_policy = True
             out.message = f"{name}: {refusal}"
@@ -168,15 +182,18 @@ class Executor:
         result = self._run(aptcmd.apt_update_argv())
         out.commands.append(result)
         out.success = result.ok
-        # apt-get update exits 0 even when some sources fail; surface that.
-        if out.success and re.search(r"^(E:|W: Failed to fetch|Err:)", result.combined_output(), re.M):
-            failures = [
-                line for line in result.combined_output().splitlines()
-                if line.startswith(("Err:", "E:", "W: Failed to fetch", "W: GPG error"))
-            ]
-            if any(line.startswith(("Err:", "E:", "W: GPG error")) for line in failures):
+        if out.success and self.config.apt.fail_on_partial_update:
+            # apt-get update exits 0 even when individual repositories fail.
+            # Scan the untruncated output: the acquisition progress on stdout
+            # can be long enough that a tail would drop the summary lines.
+            failures = partial_update_failures(result.stdout + "\n" + result.stderr)
+            if failures:
                 out.success = False
-                out.message = "apt-get update: some repositories could not be refreshed"
+                out.message = (
+                    "apt-get update: some repositories could not be refreshed ("
+                    + "; ".join(failures[:4])
+                    + ")"
+                )
                 return out
         out.message = "apt-get update: ok" if out.success else "apt-get update: failed"
         return out
@@ -298,15 +315,19 @@ class Executor:
         return handler(action)
 
     def _do_install(self, action: Action) -> OperationResult:
+        # removal_limit=0: an install that turns into a removal is either apt
+        # resolving a conflict we did not ask it to resolve, or the trailing-'-'
+        # selector trick. Neither may proceed unattended; both escalate.
         return self._guarded(
             f"install {' '.join(action.packages)}", "install", action.packages,
-            removal_limit=self.config.policy.max_removals,
+            removal_limit=0, install_limit=self.config.policy.max_new_installs,
         )
 
     def _do_reinstall(self, action: Action) -> OperationResult:
         return self._guarded(
             f"reinstall {' '.join(action.packages)}", "install", action.packages,
-            removal_limit=self.config.policy.max_removals, extra=("--reinstall",),
+            removal_limit=0, install_limit=self.config.policy.max_new_installs,
+            extra=("--reinstall",),
         )
 
     def _do_remove(self, action: Action) -> OperationResult:
@@ -364,8 +385,17 @@ class Executor:
             out.success = True
             out.message = f"would import {', '.join(action.key_ids)} (dry-run)"
             return out
-        keyserver = action.keyserver or self.config.policy.allowed_keyservers[0]
-        os.makedirs(KEYRING_DIR, mode=0o755, exist_ok=True)
+        allowed = self.config.policy.allowed_keyservers
+        keyserver = action.keyserver or (allowed[0] if allowed else "")
+        if not keyserver:
+            out.aborted_by_policy = True
+            out.message = "no keyserver given and policy.allowed_keyservers is empty"
+            return out
+        try:
+            os.makedirs(KEYRING_DIR, mode=0o755, exist_ok=True)
+        except OSError as exc:
+            out.message = f"cannot create {KEYRING_DIR}: {exc}"
+            return out
         for key_id in action.key_ids:
             safe_id = re.sub(r"[^0-9A-Fa-f]", "", key_id)[-16:]
             keyring = os.path.join(KEYRING_DIR, f"aptai-{safe_id}.gpg")
@@ -399,7 +429,11 @@ class Executor:
             out.message = problem
             return out
         host = _uri_host(action.source_uri)
-        if host and host not in self.stage_error_text:
+        if not host:
+            out.aborted_by_policy = True
+            out.message = f"{action.source_uri!r} has no usable host"
+            return out
+        if host not in _hosts_in(self.stage_error_text):
             out.aborted_by_policy = True
             out.message = (
                 f"refusing to disable {host}: apt did not report an error for that host "
@@ -509,10 +543,52 @@ def _key_mentioned(key_id: str, error_text: str) -> bool:
 
 
 def _uri_host(uri: str) -> str:
-    match = re.match(r"^[A-Za-z0-9+.\-]+://([^/\s:@]+(?::\d+)?)", uri or "")
-    if not match:
+    """Host of a repository URI, or "" when there is not a usable one.
+
+    Parsed rather than pattern-matched so that ``https://a.b@evil/`` cannot
+    pass off ``evil`` as ``a.b``; userinfo is rejected outright because no
+    legitimate plan needs it here.
+    """
+    parsed = urllib.parse.urlsplit(uri or "")
+    if parsed.scheme not in ("http", "https", "ftp") or "@" in (parsed.netloc or ""):
         return ""
-    return match.group(1).split(":")[0]
+    host = (parsed.hostname or "").strip().lower()
+    if "." not in host or len(host) < 4:
+        return ""
+    return host
+
+
+_HOST_RE = re.compile(r"\b(?:https?|ftp)://([^/\s:@]+)", re.IGNORECASE)
+
+
+def _hosts_in(text: str) -> set[str]:
+    """Every repository host named in apt's own output."""
+    return {match.group(1).lower() for match in _HOST_RE.finditer(text or "")}
+
+
+_UPDATE_FAILURE_MARKERS = (
+    "Err:",
+    "E: ",
+    "W: GPG error",
+    "W: Failed to fetch",
+    "W: Some index files failed to download",
+    "W: The repository",
+    "W: An error occurred during the signature verification",
+)
+
+
+def partial_update_failures(text: str) -> list[str]:
+    """Lines showing that `apt-get update` did not refresh every repository.
+
+    apt exits 0 in that case, so the exit status alone would report a stale
+    index -- including a stale security index -- as a success.
+    """
+    seen: list[str] = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(_UPDATE_FAILURE_MARKERS) and stripped not in seen:
+            seen.append(stripped[:300])
+    return seen
 
 
 def _comment_out_uri(content: str, uri: str) -> tuple[str, bool]:
@@ -553,10 +629,11 @@ def _comment_out_uri(content: str, uri: str) -> tuple[str, bool]:
         if stripped.startswith("#") or not stripped.strip():
             out.append(line)
             continue
-        if uri in line and stripped.startswith(("deb ", "deb-src ", "deb ", "deb[")):
-            out.append("# " + line)
-            changed = True
-        elif uri in line and stripped.split(" ", 1)[0] in ("deb", "deb-src"):
+        # apt's sources.list parser splits on arbitrary whitespace, so match on
+        # the first token rather than on a "deb " prefix.
+        first = stripped.split(None, 1)[0]
+        is_entry = first in ("deb", "deb-src") or first.startswith(("deb[", "deb-src["))
+        if is_entry and uri in line:
             out.append("# " + line)
             changed = True
         else:

@@ -78,6 +78,7 @@ class AptConfig:
     min_free_boot_mb: int = 120
     needrestart_mode: str = "l"
     on_excessive_removals: str = "abort"
+    fail_on_partial_update: bool = True
     max_upgrade_removals: int = 10
     max_autoremove_removals: int = 60
     reboot_if_required: bool = False
@@ -109,6 +110,8 @@ class PolicyConfig:
     max_actions_per_round: int = 6
     max_risk: str = "medium"
     max_removals: int = 5
+    max_new_installs: int = 50
+    require_known_packages: bool = True
     allow_remove: bool = True
     allow_purge: bool = False
     allow_hold_changes: bool = True
@@ -291,6 +294,12 @@ def validate(config: Config) -> None:
         raise ConfigError("policy.max_actions_per_round must be between 1 and 20")
     if p.max_removals < 0:
         raise ConfigError("policy.max_removals must not be negative")
+    if p.max_new_installs < 1:
+        raise ConfigError("policy.max_new_installs must be at least 1")
+    if not 1000 <= config.privacy.max_payload_chars <= 500000:
+        raise ConfigError("privacy.max_payload_chars must be between 1000 and 500000")
+    if config.privacy.dpkg_log_lines < 0:
+        raise ConfigError("privacy.dpkg_log_lines must not be negative")
     for url in (n.slack.webhook_url, n.mattermost.webhook_url):
         if url and not url.startswith(("https://", "http://")):
             raise ConfigError("notify webhook URLs must be http(s) URLs")

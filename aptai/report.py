@@ -15,6 +15,7 @@ import socket
 import time
 from dataclasses import dataclass, field
 
+from aptai.redact import redact_obj
 from aptai.version import __version__
 
 
@@ -80,6 +81,10 @@ class RunReport:
     notifications: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     path: str = ""
+    #: Mirrors privacy.redact. The report holds the raw stdout/stderr of every
+    #: apt command, which is where a private repository's credentials would
+    #: show up, so the same filter applies to the file on disk.
+    redact_output: bool = True
 
     @property
     def duration(self) -> float:
@@ -99,6 +104,10 @@ class RunReport:
         return record
 
     def to_dict(self) -> dict:
+        data = self._raw_dict()
+        return redact_obj(data) if self.redact_output else data
+
+    def _raw_dict(self) -> dict:
         return {
             "aptai_version": self.version,
             "hostname": self.hostname,

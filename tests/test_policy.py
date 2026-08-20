@@ -9,10 +9,21 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest import mock
 
+from aptai.pkgfacts import PackageFacts
 from aptai.plan import ActionKind
 from aptai.policy import Policy, action_signature, validate_source_path
+from aptai.sysexec import CommandResult
 from tests.helpers import KERNEL, action, make_config, make_facts, plan
+
+
+def _apt_cache_hit(name: str) -> CommandResult:
+    return CommandResult(argv=["apt-cache"], returncode=0, stdout=f"Package: {name}\nVersion: 1\n")
+
+
+def _apt_cache_miss() -> CommandResult:
+    return CommandResult(argv=["apt-cache"], returncode=100, stderr="N: Unable to locate package")
 
 
 class PolicyTestCase(unittest.TestCase):
@@ -371,3 +382,111 @@ class TestEscalation(PolicyTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAptArgumentGrammar(PolicyTestCase):
+    """apt's own argument grammar must not be usable against the policy.
+
+    `apt-get install ufw-` removes ufw, and `apt-get remove linux-image.`
+    expands a POSIX regex across every kernel. Both look like package names.
+    """
+
+    def test_trailing_dash_is_a_removal_selector(self):
+        for name in ["ufw-", "apparmor-", "openssh-server-", "fail2ban-"]:
+            with self.subTest(name=name):
+                self.assertRefused(action(ActionKind.APT_INSTALL, packages=[name]))
+
+    def test_trailing_dash_cannot_smuggle_a_removal_past_allow_remove(self):
+        self.config.policy.allow_remove = False
+        self.policy = Policy(self.config, self.facts)
+        self.assertRefused(action(ActionKind.APT_INSTALL, packages=["nginx-"]))
+
+    def test_unknown_names_are_refused(self):
+        with mock.patch("aptai.policy.run_command", return_value=_apt_cache_miss()):
+            self.assertRefused(
+                action(ActionKind.APT_INSTALL, packages=["libc.6"]), contains="not a package"
+            )
+
+    def test_a_regex_that_expands_to_other_packages_is_refused(self):
+        # apt-cache answers with the packages the regex matched, none of which
+        # is named `lin.x-image` -- that mismatch is what the check looks for.
+        expansion = _apt_cache_hit("linux-image-6.8.0-45-generic\nPackage: linux-image-generic")
+        with mock.patch("aptai.policy.run_command", return_value=expansion):
+            self.assertRefused(
+                action(ActionKind.APT_REMOVE, packages=["lin.x-image"]), contains="not a package"
+            )
+
+    def test_a_genuine_uninstalled_package_is_accepted(self):
+        with mock.patch("aptai.policy.run_command", return_value=_apt_cache_hit("ca-certificates")):
+            self.assertAccepted(action(ActionKind.APT_INSTALL, packages=["ca-certificates"]))
+
+    def test_installed_packages_need_no_lookup(self):
+        with mock.patch("aptai.policy.run_command", side_effect=AssertionError("must not shell out")):
+            self.assertAccepted(action(ActionKind.APT_INSTALL, packages=["nginx"]))
+
+    def test_the_check_can_be_disabled(self):
+        self.config.policy.require_known_packages = False
+        self.policy = Policy(self.config, self.facts)
+        with mock.patch("aptai.policy.run_command", side_effect=AssertionError("must not shell out")):
+            self.assertAccepted(action(ActionKind.APT_INSTALL, packages=["some-new-package"]))
+
+    def test_lookup_results_are_cached(self):
+        hit = _apt_cache_hit("ca-certificates")
+        with mock.patch("aptai.policy.run_command", return_value=hit) as runner:
+            self.policy.review(
+                plan(action(ActionKind.APT_INSTALL, packages=["ca-certificates"])), "full_upgrade"
+            )
+            self.policy.review(
+                plan(action(ActionKind.APT_REINSTALL, packages=["ca-certificates"])), "full_upgrade"
+            )
+        self.assertEqual(1, runner.call_count)
+
+
+class TestUnreadableDpkgDatabase(PolicyTestCase):
+    """With no dpkg database, nothing can be shown to be safe to remove."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.policy = Policy(self.config, PackageFacts())
+
+    def test_every_removal_is_refused(self):
+        # apt-cache is allowed to confirm the name so that the refusal comes
+        # from the protection check rather than from name validation.
+        with mock.patch("aptai.policy.run_command", return_value=_apt_cache_hit("nginx")):
+            self.assertRefused(
+                action(ActionKind.APT_REMOVE, packages=["nginx"]),
+                contains="dpkg database could not be read",
+            )
+
+    def test_protected_reason_covers_unknown_packages(self):
+        self.assertIsNotNone(self.policy.protected_reason("some-random-package"))
+
+    def test_a_partial_dpkg_query_is_not_treated_as_a_healthy_system(self):
+        facts = PackageFacts()
+        facts.packages = {f"p{i}": None for i in range(5)}
+        self.assertFalse(facts.collected)
+
+
+class TestEscalateAction(PolicyTestCase):
+    def test_an_escalate_action_stops_the_plan(self):
+        result = self.policy.review(
+            plan(
+                action(ActionKind.DPKG_AUDIT),
+                action(ActionKind.ESCALATE, reason="needs a manual conffile merge"),
+                action(ActionKind.APT_REMOVE, packages=["nginx"]),
+            ),
+            "full_upgrade",
+        )
+        self.assertTrue(result.escalate)
+        self.assertEqual("needs a manual conffile merge", result.escalation_reason)
+        self.assertNotIn(
+            ActionKind.APT_REMOVE, [a.kind for a in result.accepted],
+            "actions listed after an escalate must not run",
+        )
+
+    def test_escalate_alone_escalates(self):
+        result = self.policy.review(
+            plan(action(ActionKind.ESCALATE, reason="disk is failing")), "autoremove"
+        )
+        self.assertTrue(result.escalate)
+        self.assertEqual([], result.accepted)

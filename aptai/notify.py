@@ -12,6 +12,7 @@ a chat channel.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import socket
@@ -179,7 +180,7 @@ class Notifier:
             problem = f"HTTP {exc.code}: {redact(detail)[:200]}"
         except urllib.error.URLError as exc:
             problem = f"cannot reach the webhook: {exc.reason}"
-        except (TimeoutError, OSError) as exc:
+        except (TimeoutError, OSError, http.client.HTTPException) as exc:
             problem = f"network error: {exc}"
         LOG.error("notification to %s failed: %s", target, problem)
         return DeliveryResult(target, False, problem)

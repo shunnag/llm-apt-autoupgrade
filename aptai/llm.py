@@ -17,6 +17,7 @@ once with the optional features stripped.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import random
@@ -206,7 +207,7 @@ class ClaudeClient:
             try:
                 payload = json.loads(text) if use_structured else extract_json_object(text)
                 consultation.plan = parse_plan(payload)
-            except (json.JSONDecodeError, PlanParseError) as exc:
+            except (ValueError, PlanParseError) as exc:  # ValueError covers JSONDecodeError
                 if degradation == 0:
                     LOG.warning("could not parse the model's answer (%s); retrying once", exc)
                     use_structured = False
@@ -225,8 +226,11 @@ class ClaudeClient:
         if not self.api_key:
             return False, f"no API key in ${self.llm.api_key_env} or {self.llm.api_key_file}"
         body = {
+            # Adaptive thinking is on by default on this model and its tokens
+            # count against max_tokens, so a 64-token cap would come back
+            # truncated with no text block at all.
             "model": self.llm.model,
-            "max_tokens": 64,
+            "max_tokens": 2048,
             "messages": [{"role": "user", "content": "Reply with the single word: ready"}],
         }
         try:
@@ -235,7 +239,15 @@ class ClaudeClient:
             return False, f"400 from the API: {exc.body[:400]}"
         except LLMError as exc:
             return False, str(exc)
-        return True, f"{response.get('model', self.llm.model)} responded: {extract_text(response)[:80]}"
+        answer = extract_text(response)
+        if response.get("stop_reason") == "refusal":
+            return False, "the model declined the probe request"
+        if not answer:
+            return False, (
+                f"{response.get('model', self.llm.model)} returned no text "
+                f"(stop_reason={response.get('stop_reason')})"
+            )
+        return True, f"{response.get('model', self.llm.model)} responded: {answer[:80]}"
 
     # --------------------------------------------------------------- request
 
@@ -313,7 +325,9 @@ class ClaudeClient:
                 if attempt == retries:
                     raise LLMError(last_error) from exc
                 self._sleep(attempt, None)
-            except (TimeoutError, OSError) as exc:
+            except (TimeoutError, OSError, http.client.HTTPException) as exc:
+                # A truncated or malformed HTTPS response is a network problem,
+                # not a reason to abort an in-progress upgrade.
                 last_error = f"network error talking to {url}: {exc}"
                 if attempt == retries:
                     raise LLMError(last_error) from exc
@@ -413,10 +427,12 @@ def build_user_prompt(
         "above. Do not include any prose outside the JSON object.",
     ]
     prompt = "\n".join(sections)
-    if len(prompt) > max_chars:
-        head = prompt[: max_chars // 2]
-        tail = prompt[-max_chars // 2:]
-        prompt = head + "\n...[payload truncated by aptai]...\n" + tail
+    # max(1, ...) matters: `prompt[-0:]` is the whole string, so a zero or
+    # negative limit would upload everything instead of nothing.
+    limit = max(1000, int(max_chars))
+    if len(prompt) > limit:
+        half = max(1, limit // 2)
+        prompt = prompt[:half] + "\n...[payload truncated by aptai]...\n" + prompt[-half:]
     return prompt
 
 

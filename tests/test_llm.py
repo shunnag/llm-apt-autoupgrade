@@ -253,3 +253,70 @@ class TestExtractText(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPromptTruncationEdgeCases(unittest.TestCase):
+    """`prompt[-0:]` is the whole string -- a zero limit must not mean 'send it all'."""
+
+    def _prompt(self, max_chars):
+        return build_user_prompt(
+            stage="full_upgrade", error_text="E" * 200000, diagnostics_text="d",
+            history=[], round_number=1, max_rounds=3,
+            allowed=STAGE_ACTIONS["full_upgrade"], max_chars=max_chars,
+        )
+
+    def test_zero_limit_does_not_upload_everything(self):
+        self.assertLess(len(self._prompt(0)), 2000)
+
+    def test_negative_limit_does_not_double_the_payload(self):
+        self.assertLess(len(self._prompt(-1)), 2000)
+
+    def test_normal_limit(self):
+        self.assertLessEqual(len(self._prompt(20000)), 20100)
+
+
+class TestProbe(unittest.TestCase):
+    def setUp(self):
+        self.client = ClaudeClient(make_config(), api_key="test-key")
+
+    def test_leaves_room_for_thinking_tokens(self):
+        captured = {}
+
+        def side_effect(request, *args, **kwargs):
+            captured.update(json.loads(request.data.decode()))
+            return ok(api_response("ready"))
+
+        with mock.patch("urllib.request.urlopen", side_effect=side_effect):
+            passed, message = self.client.probe()
+        self.assertTrue(passed, message)
+        self.assertGreaterEqual(captured["max_tokens"], 1024)
+
+    def test_an_empty_answer_is_a_failure(self):
+        truncated = api_response("", stop_reason="max_tokens")
+        with mock.patch("urllib.request.urlopen", return_value=ok(truncated)):
+            passed, message = self.client.probe()
+        self.assertFalse(passed)
+        self.assertIn("no text", message)
+
+    def test_a_refused_probe_is_a_failure(self):
+        with mock.patch("urllib.request.urlopen", return_value=ok(api_response("", stop_reason="refusal"))):
+            passed, _ = self.client.probe()
+        self.assertFalse(passed)
+
+
+class TestTruncatedResponse(unittest.TestCase):
+    def test_http_protocol_error_is_retried_not_raised(self):
+        import http.client
+
+        client = ClaudeClient(make_config(), api_key="test-key")
+        bodies = [http.client.IncompleteRead(b"partial"), ok(api_response(json.dumps(GOOD_PLAN)))]
+
+        def side_effect(*args, **kwargs):
+            item = bodies.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with mock.patch("time.sleep"), mock.patch("urllib.request.urlopen", side_effect=side_effect):
+            result = client.consult(stage="full_upgrade", error_text="e", diagnostics_text="d")
+        self.assertIsNotNone(result.plan, result.error)

@@ -14,6 +14,7 @@ problem, so the update stage cannot reach dpkg state at all; a failing
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -124,7 +125,18 @@ MAX_WAIT_SECONDS = 600
 #: Debian policy 5.6.1 package names, optionally with a :arch qualifier and an
 #: =version pin.  Deliberately strict: no whitespace, no slashes, no shell
 #: metacharacters can survive this.
-PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]{1,127}(:[a-zA-Z0-9][a-zA-Z0-9\-]{0,31})?(=[A-Za-z0-9][A-Za-z0-9.+:~\-]{0,63})?$")
+#
+# Note the final ``[a-z0-9+]``: apt-get reads a *trailing* ``-`` on an argument
+# as "remove this package instead" and a trailing ``+`` as "install it", for
+# any subcommand. No real package name ends in ``-``, so that is refused
+# outright; ``+`` is kept because g++ and friends are real packages, and the
+# known-package check in the policy stops ``anything+`` from slipping through.
+PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]{0,126}[a-z0-9+](:[a-zA-Z0-9][a-zA-Z0-9\-]{0,31})?(=[A-Za-z0-9][A-Za-z0-9.+:~\-]{0,63})?$")
+
+#: Characters apt-get and apt-cache interpret as a POSIX regular expression
+#: when the literal name does not resolve to a package. ``linux-image.`` looks
+#: like a package name and expands to every kernel on the system.
+REGEX_METACHARACTERS = ".+?*[]^$\\"
 KEY_ID_RE = re.compile(r"^(0x)?[0-9A-Fa-f]{8,40}$")
 KEYSERVER_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9.\-]{0,253}[a-zA-Z0-9])?$")
 
@@ -216,8 +228,10 @@ def plan_schema(allowed: tuple[ActionKind, ...]) -> dict:
             },
             "actions": {
                 "type": "array",
-                "maxItems": 8,
-                "description": "Ordered remediation steps. Empty when escalate is true.",
+                # No maxItems: the structured-output schema validator accepts a
+                # conservative subset of JSON Schema, and policy.max_actions_per_round
+                # enforces the real cap locally anyway.
+                "description": "Ordered remediation steps, at most 8. Empty when escalate is true.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -340,10 +354,20 @@ def _as_str_list(value, where: str) -> list[str]:
 
 
 def _as_int(value, where: str) -> int:
+    """Convert to int, refusing anything int() would choke on.
+
+    ``1e400`` is legal JSON and decodes to ``float("inf")``, on which ``int()``
+    raises OverflowError -- an exception nobody up the stack expects. Every
+    malformed answer must become a PlanParseError, never a crash.
+    """
     if value is None or value == "":
         return 0
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise PlanParseError(f"{where} must be a number")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise PlanParseError(f"{where} must be a finite number")
+    if abs(value) > 2 ** 31:
+        raise PlanParseError(f"{where} is out of range")
     return int(value)
 
 

@@ -41,9 +41,15 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), PLACEHOLDER),
     (re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._\-]{12,}"), r"\1 " + PLACEHOLDER),
     # key=value shaped secrets in config snippets, query strings and env dumps.
+    #
+    # An explicit ':' or '=' separator is required. The bare-whitespace form
+    # ("passwd libpam-modules") would eat package names out of apt's own
+    # output -- 'passwd' is an Essential Debian package that shows up in
+    # exactly the dpkg failures this tool exists to read -- and a mangled
+    # removal list is worse than a slightly less aggressive filter.
     (re.compile(
-        r"(?i)\b(password|passwd|pass|secret|token|api[_-]?key|apikey|auth|credential)s?"
-        r"(\s*[:=]\s*|\s+)"
+        r"(?i)\b(password|passwd|secret|token|api[_-]?key|apikey|auth[_-]?token|credentials?)"
+        r"(\s*[:=]\s*)"
         r"(\"[^\"\n]{3,}\"|'[^'\n]{3,}'|[^\s,;&\"']{3,})"),
      lambda m: f"{m.group(1)}{m.group(2)}{PLACEHOLDER}"),
 )

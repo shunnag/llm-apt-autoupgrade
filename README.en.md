@@ -166,8 +166,11 @@ isolation, not a systemd sandbox around dpkg.
 **1. The model cannot write a command.** Its answer is constrained to a JSON
 schema whose `action` field is an enum of implemented actions. Every subprocess
 call is a list with `shell=False`; no command string is ever built. Package
-names must match Debian's grammar, so a name can never start with `-` and be
-read as an option.
+names must match Debian's grammar *and* resolve to a package that actually
+exists here — because apt's own argument grammar is the trap: `apt-get install
+ufw-` **removes** ufw, and `apt-get remove linux-image.` expands as a POSIX
+regex across every kernel. A leading `-`, a trailing `-`, and any name that
+does not resolve literally are all refused (`policy.require_known_packages`).
 
 **2. The local policy** (`aptai/policy.py`) enforces the per-stage vocabulary,
 the protected-package rules, the per-round action budget, removal limits, a
@@ -175,8 +178,12 @@ maximum risk level, and refuses to repeat an action that already failed.
 Purge, version pinning, source editing and key import are off by default.
 
 **3. apt's own simulation** — every destructive operation runs with `-s` first,
-and the plan is abandoned if it removes a protected package, exceeds the
-removal ceiling, or downgrades. This check asks apt, not the model.
+and the plan is abandoned if it cannot be parsed, removes a protected package,
+exceeds the removal ceiling, installs more than `max_new_installs` new
+packages, or downgrades. An `apt_install` gets a removal ceiling of zero: an
+install that turns into a removal always escalates. This check asks apt, not
+the model. If `dpkg-query` could not be read at all, every removal is refused —
+without the database, nothing can be shown to be safe.
 
 **4. Prompt-injection handling** — machine output is fenced as untrusted data;
 `import_repo_key` only accepts a key id apt itself reported as missing; and
@@ -248,6 +255,8 @@ effort = "high"      # low | medium | high | xhigh | max
 [policy]
 max_risk = "medium"
 max_removals = 5
+max_new_installs = 50
+require_known_packages = true   # do not turn this off
 allow_sources_edit = false
 allow_key_import = false
 ```
@@ -255,7 +264,7 @@ allow_key_import = false
 ## Development
 
 ```bash
-make test     # 155 unit tests; no network, no root, no apt required
+make test     # 230 unit tests; no network, no root, no apt required
 make lint     # byte-compile + shellcheck + systemd-analyze verify
 make check    # both
 make dry-run  # a harmless local run
@@ -279,6 +288,9 @@ third-party import** has crept in, and installs and uninstalls the tool inside
 | `Claude API rejected the request` (400) | The 400 body is logged verbatim; individual features can be switched off in `[llm]` |
 | `every proposed action was refused by the local policy` | Working as intended — the reasons are in the run report |
 | Ran fine but nothing upgraded | `on_excessive_removals` may have degraded it to a removal-free `upgrade`; check `degraded` in the report |
+| `some repositories could not be refreshed` | apt exits 0 on a partial update; `apt.fail_on_partial_update` treats that as a failure |
+| `is not a package this system knows about` | The apt-grammar guard. Confirm with `apt-cache show <name>` |
+| `the local dpkg database could not be read` | `dpkg-query` failed; check `dpkg --audit` and `/var/lib/dpkg/status` |
 
 ## License
 

@@ -29,9 +29,23 @@ BASE_ENV: dict[str, str] = {
     "LANGUAGE": "",
 }
 
-#: Environment variables that must never be inherited by apt/dpkg children --
-#: the API key has no business being visible to maintainer scripts.
-SCRUBBED_ENV_KEYS = ("ANTHROPIC_API_KEY", "APTAI_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+#: Environment variables that must never be inherited by apt/dpkg children.
+#:
+#: systemd loads /etc/aptai/env into aptai's own environment, so without this
+#: the API key and the Slack/Mattermost webhook URLs would be visible to every
+#: maintainer script of every package being upgraded -- third-party code
+#: running as root. apt and dpkg need none of it.
+SCRUBBED_ENV_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "APTAI_API_KEY",
+    "APTAI_SLACK_WEBHOOK",
+    "APTAI_MATTERMOST_WEBHOOK",
+)
+
+#: Name suffixes treated as secret-shaped and dropped as well, so a custom
+#: `llm.api_key_env` or a locally added webhook variable is covered too.
+SCRUBBED_ENV_SUFFIXES = ("_KEY", "_TOKEN", "_SECRET", "_WEBHOOK", "_PASSWORD", "_APIKEY")
 
 MAX_CAPTURE_BYTES = 512 * 1024
 
@@ -77,8 +91,13 @@ class CommandResult:
         }
 
 
+def is_secret_env_key(name: str) -> bool:
+    upper = name.upper()
+    return upper in SCRUBBED_ENV_KEYS or upper.endswith(SCRUBBED_ENV_SUFFIXES)
+
+
 def build_env(extra: dict[str, str] | None = None, needrestart_mode: str | None = None) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_ENV_KEYS}
+    env = {k: v for k, v in os.environ.items() if not is_secret_env_key(k)}
     env.update(BASE_ENV)
     if needrestart_mode:
         # 'l' = only list services that need a restart, 'a' = restart them.
@@ -101,8 +120,12 @@ def run_command(
 
     Never raises for a non-zero exit status; inspect :attr:`CommandResult.ok`.
     """
-    if not argv or not all(isinstance(a, str) for a in argv):
+    # A bare string would not raise here but would be executed as a single
+    # program name, so the type is checked as well as the contents.
+    if not isinstance(argv, (list, tuple)) or not argv:
         raise ValueError("argv must be a non-empty list of strings")
+    if not all(isinstance(a, str) for a in argv):
+        raise ValueError("argv must contain only strings")
     started = time.monotonic()
     try:
         proc = subprocess.run(  # noqa: S603 - shell=False, argv is a validated list

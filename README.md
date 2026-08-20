@@ -187,9 +187,19 @@ systemd のサンドボックスではなく VM やコンテナを使ってく�
 | `wait` / `retry_stage` / `escalate` | 待機・再試行・人間へのエスカレーション |
 
 `subprocess` の呼び出しはすべて `shell=False` のリスト形式で、aptai がコマンド文字列を
-組み立てる箇所はどこにもありません。パッケージ名は Debian のパッケージ名文法
-（`^[a-z0-9][a-z0-9+.-]*` + 任意の `:arch` / `=version`）に一致しない限り拒否されるので、
-`-` で始まる名前がオプションとして解釈されることもありません。
+組み立てる箇所はどこにもありません。パッケージ名は Debian のパッケージ名文法に一致し、
+かつ **実際にこのシステムに存在するパッケージであること**を確認してから渡されます。
+
+これは apt 自身の引数文法を悪用されないために必要です。`apt-get install ufw-` は
+末尾の `-` によって「ufw を**削除**する」と解釈され、`apt-get remove linux-image.` は
+`.` があるため POSIX 正規表現として展開されてカーネル全体にマッチします。
+どちらも一見ただのパッケージ名です。そこで aptai は、
+
+- 先頭が `-` の名前を拒否（オプションとして解釈されるのを防ぐ）、
+- 末尾が `-` の名前を拒否（削除セレクタを防ぐ）、
+- そのうえで `dpkg` のデータベースまたは `apt-cache show` に存在する名前だけを許可
+
+します（`policy.require_known_packages`、既定で有効）。
 
 ### 2. ローカルポリシー（`aptai/policy.py`）
 
@@ -204,11 +214,17 @@ systemd のサンドボックスではなく VM やコンテナを使ってく�
 
 ポリシーを通過した操作でも、実行前に必ず `apt-get -s` を実行して apt の計画を読み、
 
+- **計画が解析できなければ中止**（内容の分からない計画は実行しない）
 - 保護対象パッケージが削除されるなら **中止**
 - 削除数が上限を超えるなら **中止**（設定により削除なしの `upgrade` に降格も可）
+- `apt_install` / `apt_reinstall` が 1 つでも削除を伴うなら **中止**（削除上限 0）
+- 新規導入数が `policy.max_new_installs` を超えるなら **中止**
 - ダウングレードが含まれ、かつ許可されていないなら **中止**
 
 します。この検査は「モデルが正直に申告したか」に依存せず、**apt に直接聞いています**。
+
+さらに `dpkg-query` でパッケージ台帳を読めなかった場合は、Essential 判定ができない以上
+**あらゆる削除を拒否**します（fail-closed）。
 
 ### 4. プロンプトインジェクション対策
 
@@ -287,6 +303,8 @@ effort = "high"      # low | medium | high | xhigh | max
 [policy]
 max_risk = "medium"  # "high" にすると削除系の提案も受け入れる
 max_removals = 5
+max_new_installs = 50
+require_known_packages = true   # 無効化しないでください
 allow_sources_edit = false
 allow_key_import = false
 ```
@@ -294,7 +312,7 @@ allow_key_import = false
 ## 開発
 
 ```bash
-make test     # 155 件のユニットテスト（ネットワーク・root・apt すべて不要）
+make test     # 230 件のユニットテスト（ネットワーク・root・apt すべて不要）
 make lint     # バイトコンパイル + shellcheck + systemd-analyze verify
 make check    # lint + test
 make dry-run  # ローカル設定で無害な実行
@@ -318,6 +336,9 @@ CI では Python 3.11 / 3.12 / 3.13 でのテストに加えて、
 | `Claude API rejected the request` (400) | 400 の本文がログに残ります。`llm.use_structured_output` 等を個別に無効化できます |
 | `every proposed action was refused by the local policy` | 意図した動作です。レポート JSON に却下理由が入っています |
 | 実行はされたが更新されない | `on_excessive_removals` により `upgrade` に降格した可能性があります。レポートの `degraded` を確認 |
+| `apt-get update: some repositories could not be refreshed` | apt は終了コード 0 でも一部リポジトリの取得に失敗します。既定 (`apt.fail_on_partial_update`) ではこれを失敗として扱います |
+| `is not a package this system knows about` | apt の引数文法対策です。`apt-cache show <名前>` で実在を確認してください |
+| `the local dpkg database could not be read` | `dpkg-query` が失敗しています。`dpkg --audit` と `/var/lib/dpkg/status` を確認してください |
 
 ## ライセンス
 

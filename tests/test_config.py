@@ -130,3 +130,56 @@ class TestResolveSecret(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNewLimits(unittest.TestCase):
+    def test_max_new_installs_must_be_positive(self):
+        config = Config()
+        config.policy.max_new_installs = 0
+        with self.assertRaises(ConfigError):
+            validate(config)
+
+    def test_payload_cap_must_be_sane(self):
+        for value in (0, -1, 10, 10_000_000):
+            with self.subTest(value=value):
+                config = Config()
+                config.privacy.max_payload_chars = value
+                with self.assertRaises(ConfigError):
+                    validate(config)
+
+    def test_dpkg_log_lines_may_be_zero_but_not_negative(self):
+        config = Config()
+        config.privacy.dpkg_log_lines = 0
+        validate(config)
+        config.privacy.dpkg_log_lines = -1
+        with self.assertRaises(ConfigError):
+            validate(config)
+
+
+class TestCommandLineOverrides(unittest.TestCase):
+    """A command line flag must not be able to walk past a validated limit."""
+
+    def test_max_rounds_is_validated(self):
+        from aptai.cli import build_parser, _apply_overrides
+
+        args = build_parser().parse_args(["run", "--max-rounds", "500"])
+        config = Config()
+        with self.assertRaises(ConfigError):
+            _apply_overrides(config, args)
+
+    def test_a_sane_override_is_applied(self):
+        from aptai.cli import build_parser, _apply_overrides
+
+        args = build_parser().parse_args(["run", "--max-rounds", "1", "--mode", "suggest"])
+        config = Config()
+        _apply_overrides(config, args)
+        self.assertEqual(1, config.general.max_rounds)
+        self.assertEqual("suggest", config.general.mode)
+
+    def test_dry_run_flag(self):
+        from aptai.cli import build_parser, _apply_overrides
+
+        args = build_parser().parse_args(["run", "--dry-run"])
+        config = Config()
+        _apply_overrides(config, args)
+        self.assertTrue(config.general.dry_run)

@@ -127,3 +127,29 @@ class TestDiskSpace(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSelectorSuffixes(unittest.TestCase):
+    """The argv builders re-validate names, independently of the policy."""
+
+    def test_rejects_trailing_selector_characters(self):
+        for name in ["ufw-", "apparmor-", "linux-image."]:
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    apt_packages_argv("install", [name])
+                with self.assertRaises(ValueError):
+                    apt_mark_argv("hold", [name])
+
+    def test_accepts_real_names(self):
+        argv = apt_packages_argv("install", ["g++", "libstdc++6", "python3.12"])
+        self.assertEqual(["g++", "libstdc++6", "python3.12"], argv[-3:])
+
+    def test_rejects_non_strings(self):
+        with self.assertRaises(ValueError):
+            apt_packages_argv("install", [None])
+
+
+class TestPurgeLines(unittest.TestCase):
+    def test_purg_counts_as_a_removal(self):
+        sim = parse_simulation("Purg nginx [1]\nRemv curl [2]\n")
+        self.assertEqual(["nginx", "curl"], sim.removals)

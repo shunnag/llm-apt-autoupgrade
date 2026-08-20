@@ -33,7 +33,17 @@ First release.
 - systemd service and timer, plus `install.sh` / `uninstall.sh` and a Makefile.
 - CLI: `run`, `check`, `diagnose`, `test-llm`, `notify-test`, `show-config`,
   `show-policy`.
-- 155 unit tests, most of them hostile-plan tests for the policy validator.
+- Defences against apt's own argument grammar: a leading `-` (option), a
+  trailing `-` (apt's remove selector) and unresolvable names (POSIX regex
+  expansion) are all refused, and every proposed package must resolve to a real
+  package on the system.
+- Fail-closed behaviour when `dpkg-query` cannot be read: no package is removed
+  when Essential status cannot be verified.
+- Partial `apt-get update` failures are treated as stage failures rather than
+  success, so a stale security index is never upgraded against silently.
+- Secret-shaped environment variables are scrubbed from the environment handed
+  to apt/dpkg maintainer scripts, and the on-disk run report is redacted.
+- 230 unit tests, most of them hostile-plan tests for the policy validator.
 - CI on Python 3.11/3.12/3.13, a static stdlib-only import check, and
   install/uninstall smoke tests in `ubuntu:24.04` and `debian:trixie`.
 

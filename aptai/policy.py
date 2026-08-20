@@ -26,10 +26,12 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from aptai.aptcmd import APT_CACHE
 from aptai.config import Config
 from aptai.pkgfacts import PackageFacts, base_name
 from aptai.plan import (
     KEY_ID_RE,
+    REGEX_METACHARACTERS,
     KEYSERVER_RE,
     MAX_WAIT_SECONDS,
     PACKAGE_RE,
@@ -40,6 +42,7 @@ from aptai.plan import (
     ActionKind,
     Plan,
 )
+from aptai.sysexec import run_command
 
 #: apt source files that belong to the distribution itself.  Disabling these
 #: would stop the machine receiving security updates entirely, which is a far
@@ -114,6 +117,7 @@ class Policy:
         self.facts = facts
         self._protected = {p.strip().lower() for p in config.policy.protected_packages if p.strip()}
         self._kernel = {p.lower() for p in facts.running_kernel_packages()}
+        self._known_cache: dict[str, bool] = {}
 
     # ---------------------------------------------------------------- public
 
@@ -163,10 +167,19 @@ class Policy:
                 else:
                     seen.add(signature)
 
-            if reason is None:
-                result.accepted.append(action)
-            else:
+            if reason is not None:
                 result.rejected.append(Rejection(action, reason))
+                continue
+            if action.kind is ActionKind.ESCALATE:
+                # An escalate action means the same thing as the plan-level
+                # flag: stop here. Running the actions listed beside it would
+                # be acting on a plan the model itself said needs a human.
+                result.escalate = True
+                result.escalation_reason = action.reason or "the advisor asked for human intervention"
+                for later in plan.actions[plan.actions.index(action) + 1:]:
+                    result.rejected.append(Rejection(later, "an earlier action escalated"))
+                return result
+            result.accepted.append(action)
 
         if not result.accepted and result.rejected and not result.escalate:
             result.escalate = True
@@ -225,7 +238,10 @@ class Policy:
 
     def _check_risk(self, action: Action) -> str | None:
         limit = self.config.policy.max_risk
-        if RISK_LEVELS.index(action.risk) > RISK_LEVELS.index(limit):
+        # An unrecognised risk level is treated as the worst case rather than
+        # raising: this code must never crash on a malformed answer.
+        level = RISK_LEVELS.index(action.risk) if action.risk in RISK_LEVELS else len(RISK_LEVELS)
+        if level > RISK_LEVELS.index(limit):
             return f"risk {action.risk!r} exceeds policy.max_risk ({limit})"
         return None
 
@@ -242,6 +258,12 @@ class Policy:
         for package in action.packages:
             if not PACKAGE_RE.match(package):
                 return f"{package!r} is not a valid Debian package name"
+            if not self._is_known_package(package):
+                return (
+                    f"{package!r} is not a package this system knows about "
+                    "(apt would reinterpret an unknown name as a removal selector "
+                    "or a POSIX regular expression)"
+                )
             if "=" in package and not self.config.policy.allow_downgrade:
                 # A pinned version may be older than what is installed.  Pins
                 # are still allowed, but only when downgrades are permitted:
@@ -339,6 +361,12 @@ class Policy:
 
     def protected_reason(self, package: str) -> str | None:
         """Why ``package`` may never be removed, or ``None`` when it may be."""
+        if not self.facts.collected:
+            # Without the dpkg database we cannot tell an Essential package
+            # from any other, so nothing may be removed. Failing closed here
+            # also covers Executor._review_simulation, which asks the same
+            # question about apt's own plan.
+            return "the local dpkg database could not be read, so protection cannot be verified"
         name = base_name(package).lower()
         if name in self._protected:
             return "it is in policy.protected_packages"
@@ -351,6 +379,31 @@ class Policy:
         if name.startswith(("linux-image-", "linux-modules-")) and self.facts.kernel_release in name:
             return f"it belongs to the running kernel ({self.facts.kernel_release})"
         return None
+
+    def _is_known_package(self, package: str) -> bool:
+        """True when ``package`` names a real package on this system.
+
+        This is what stops apt's own argument grammar from being used against
+        us. ``ufw-`` is not a package, so apt-get would read it as "remove
+        ufw"; ``linux-image.`` is not a package, so apt-get would expand it as
+        a POSIX regex across every kernel. Requiring the name to resolve
+        literally removes both, and it costs nothing for a genuine fix, which
+        always names a package that exists.
+        """
+        if not self.config.policy.require_known_packages:
+            return True
+        name = base_name(package)
+        if name in self.facts.packages:
+            return True
+        cached = self._known_cache.get(name)
+        if cached is not None:
+            return cached
+        result = run_command([APT_CACHE, "show", "--no-all-versions", name], timeout=60)
+        known = result.ok and any(
+            line.strip() == f"Package: {name}" for line in result.stdout.splitlines()
+        )
+        self._known_cache[name] = known
+        return known
 
     def protected_hits(self, packages) -> list[tuple[str, str]]:
         """Every ``(package, reason)`` pair among ``packages`` that is protected."""

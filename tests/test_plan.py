@@ -111,3 +111,77 @@ class TestSchema(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHostileNumbers(unittest.TestCase):
+    """`1e400` is legal JSON and decodes to inf; int(inf) raises OverflowError."""
+
+    def test_infinity_becomes_a_parse_error(self):
+        import json as _json
+
+        payload = _json.loads(
+            '{"diagnosis":"d","confidence":"low","escalate":false,'
+            '"actions":[{"action":"wait","reason":"r","risk":"low","seconds":1e400}]}'
+        )
+        with self.assertRaises(PlanParseError):
+            parse_plan(payload)
+
+    def test_negative_infinity_becomes_a_parse_error(self):
+        with self.assertRaises(PlanParseError):
+            parse_plan({"actions": [{"action": "wait", "reason": "r", "risk": "low",
+                                     "seconds": float("-inf")}]})
+
+    def test_nan_becomes_a_parse_error(self):
+        with self.assertRaises(PlanParseError):
+            parse_plan({"actions": [{"action": "wait", "reason": "r", "risk": "low",
+                                     "seconds": float("nan")}]})
+
+    def test_huge_integer_becomes_a_parse_error(self):
+        with self.assertRaises(PlanParseError):
+            parse_plan({"actions": [{"action": "wait", "reason": "r", "risk": "low",
+                                     "seconds": 10 ** 30}]})
+
+    def test_ordinary_numbers_still_work(self):
+        plan = parse_plan(
+            {"actions": [{"action": "wait", "reason": "r", "risk": "low", "seconds": 30}]}
+        )
+        self.assertEqual(30, plan.actions[0].seconds)
+
+
+class TestPackageGrammar(unittest.TestCase):
+    def test_rejects_apt_selector_suffixes(self):
+        from aptai.plan import PACKAGE_RE
+
+        for name in ["ufw-", "apparmor-", "linux-image."]:
+            self.assertIsNone(PACKAGE_RE.match(name), f"{name!r} must not match")
+
+    def test_accepts_real_package_names(self):
+        from aptai.plan import PACKAGE_RE
+
+        for name in ["nginx", "g++", "libstdc++6", "python3.12", "linux-image-6.8.0-45-generic",
+                     "libfoo1:amd64", "nginx=1.24.0-1"]:
+            self.assertIsNotNone(PACKAGE_RE.match(name), f"{name!r} must match")
+
+    def test_schema_uses_only_widely_supported_keywords(self):
+        # The structured-output validator accepts a conservative subset; keep
+        # the schema inside it so a plan is never rejected with a 400.
+        allowed = {"type", "properties", "required", "additionalProperties", "items",
+                   "enum", "description"}
+        seen = set()
+
+        def walk(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key in ("properties",):
+                        seen.add(key)
+                        for sub in value.values():
+                            walk(sub)
+                        continue
+                    seen.add(key)
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(plan_schema(STAGE_ACTIONS["full_upgrade"]))
+        self.assertEqual(set(), seen - allowed, f"unexpected schema keywords: {seen - allowed}")

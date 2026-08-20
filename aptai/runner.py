@@ -84,6 +84,7 @@ class Runner:
             hostname=self.config.general.hostname or socket.gethostname(),
             mode=self.mode,
             dry_run=self.dry_run,
+            redact_output=self.config.privacy.redact,
         )
         try:
             self.preflight()
@@ -99,20 +100,38 @@ class Runner:
         self.policy = Policy(self.config, self.facts)
         self.executor = Executor(self.config, self.policy, dry_run=self.dry_run)
 
-        for stage in STAGES:
-            if self.only_stages and stage.key not in self.only_stages:
-                continue
-            record = report.stage(stage.key)
-            if not getattr(self.config.apt, stage.enabled_attr):
-                record.skipped = True
-                record.success = True
-                record.message = f"{stage.label} is disabled in the configuration"
-                LOG.info("%s", record.message)
-                continue
-            self._run_stage(stage, record)
-            if not record.success:
-                LOG.error("%s did not recover; stopping the run", stage.label)
-                break
+        if not self.facts.collected:
+            LOG.error(
+                "the dpkg database could not be read; no package will be removed this run"
+            )
+            report.errors.append("dpkg-query failed: removal protection cannot be verified")
+
+        try:
+            for stage in STAGES:
+                if self.only_stages and stage.key not in self.only_stages:
+                    continue
+                record = report.stage(stage.key)
+                if not getattr(self.config.apt, stage.enabled_attr):
+                    record.skipped = True
+                    record.success = True
+                    record.message = f"{stage.label} is disabled in the configuration"
+                    LOG.info("%s", record.message)
+                    continue
+                self._run_stage(stage, record)
+                if not record.success:
+                    LOG.error("%s did not recover; stopping the run", stage.label)
+                    break
+        except Exception as exc:  # noqa: BLE001 - last resort, see below
+            # An unexpected exception must still produce a report and a page.
+            # Dying silently half way through an upgrade is the one outcome
+            # this tool exists to prevent.
+            LOG.exception("unexpected error during the upgrade")
+            report.errors.append(f"unexpected error: {type(exc).__name__}: {exc}")
+            report.success = False
+            report.finished_at = time.time()
+            report.write(self.config.general.log_dir, keep=self.config.general.keep_reports)
+            self._notify(report, preflight_error=f"aptai stopped with {type(exc).__name__}: {exc}")
+            raise
 
         report.success = all(s.success for s in report.stages) and bool(report.stages)
         report.reboot_required, report.reboot_packages = reboot_required()

@@ -87,13 +87,15 @@ model answer
    │
    ├─ policy.Policy.review .... LAYER 1. Local config + dpkg facts.
    │                            Stage vocabulary, protected packages, budgets,
-   │                            risk ceiling, repeats, per-action validation.
+   │                            risk ceiling, repeats, per-action validation,
+   │                            and "does this package actually exist here?".
    │
    └─ executor.Executor ....... LAYER 2. apt's own opinion.
         _guarded(subcommand):
             apt-get -s <cmd>          ← ask apt what would happen
             parse_simulation(...)
-            _review_simulation(...)   ← protected removals? over the ceiling?
+            _review_simulation(...)   ← plan parseable? protected removals?
+                                        over the removal/install ceiling?
                                         downgrades?
             apt-get -y <cmd>          ← only now
 ```
@@ -112,7 +114,9 @@ reads the model's description of the action at all.
    only there. An action that touches dpkg state does not belong in `update`.
 3. `policy.py`: add a `_check_*` branch in the `_check` dispatch table. Default
    to refusing; require an explicit config flag for anything that changes what
-   the machine trusts or where it fetches packages from.
+   the machine trusts or where it fetches packages from. If the action takes
+   package names, route them through `_check_packages` so they inherit the
+   grammar and known-package checks.
 4. `executor.py`: implement it in the `execute` dispatch table. Route anything
    destructive through `_guarded` so it inherits the simulation gate. Honour
    `self.dry_run`.
@@ -128,7 +132,7 @@ tests run anywhere in milliseconds without root, apt or network.
 
 | File | What it pins down |
 |---|---|
-| `test_policy.py` | hostile plans are refused — injection, protected packages, budgets, stage vocabulary, escalation |
+| `test_policy.py` | hostile plans are refused — injection, apt selector suffixes and regexes, protected packages, budgets, stage vocabulary, escalation, fail-closed on an unreadable dpkg database |
 | `test_executor.py` | the simulation gate; path/symlink handling; the key-mention and host-mention injection guards |
 | `test_plan.py` | schema/parse shape; unknown actions rejected; the schema enum tracks the stage vocabulary |
 | `test_aptcmd.py` | `apt-get -s` parsing against real output shapes; argv construction |
@@ -137,6 +141,8 @@ tests run anywhere in milliseconds without root, apt or network.
 | `test_redact.py` | credential shapes are masked; ordinary apt output is not |
 | `test_notify.py` | Slack/Mattermost payloads; delivery failures are reported, not raised |
 | `test_runner.py` | `error_signature` behaviour; stage wiring is complete |
+| `test_sysexec.py` | secret-shaped variables never reach apt/dpkg children; argv must be a list |
+| `test_report.py` | the on-disk report is redacted, pruned and not world-readable |
 
 ## Claude API specifics
 

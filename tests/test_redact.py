@@ -74,3 +74,24 @@ class TestForbiddenPaths(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRedactionIsNotOverEager(unittest.TestCase):
+    """Redaction must not eat the apt output the model has to reason about."""
+
+    def test_passwd_the_package_survives(self):
+        text = "The following packages will be REMOVED:\n  passwd libpam-modules libpam-runtime"
+        self.assertEqual(text, redact(text))
+
+    def test_dpkg_error_mentioning_passwd_survives(self):
+        text = "dpkg: error processing package passwd (--configure):"
+        self.assertEqual(text, redact(text))
+
+    def test_setting_up_lines_survive(self):
+        text = "Setting up passwd (1:4.13+dfsg1-4ubuntu3) ..."
+        self.assertEqual(text, redact(text))
+
+    def test_real_assignments_are_still_masked(self):
+        for line in ["password=hunter2hunter2", "API_KEY = abcdefghijkl", "token: zzzzzzzzzz"]:
+            with self.subTest(line=line):
+                self.assertIn(PLACEHOLDER, redact(line))

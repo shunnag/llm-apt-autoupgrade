@@ -47,15 +47,30 @@ Every subprocess goes through `aptai/sysexec.py:run_command`, which takes a
 list and hard-codes `shell=False`. Nothing in the package builds a command
 line as text.
 
-### 2. Arguments cannot be options or paths
+### 2. Arguments cannot be options, selectors or regexes
 
 Package names must match Debian's package-name grammar, optionally with a
-`:arch` qualifier and an `=version` pin. The pattern is anchored and starts
-with `[a-z0-9]`, so a name can never begin with `-` and be read as an option
-(`--allow-remove-essential` is rejected as a package name), and it can contain
-no whitespace, quotes, slashes or shell metacharacters. `aptcmd` re-checks for
-a leading `-` before building argv, so the guarantee survives a future refactor
-of the regex.
+`:arch` qualifier and an `=version` pin. The pattern is anchored, so a name can
+contain no whitespace, quotes, slashes or shell metacharacters.
+
+The subtler half is apt's *own* argument grammar, which turns two innocuous
+strings into something else entirely:
+
+| Argument | What apt-get does with it |
+|---|---|
+| `--allow-remove-essential` | an option — blocked because a name may not start with `-` |
+| `ufw-` | **removes** ufw: a trailing `-` is apt's "remove instead" selector |
+| `anything+` | installs it: a trailing `+` is the mirror selector |
+| `linux-image.` | a POSIX regex, expanded across every matching package |
+
+So aptai refuses a leading `-`, refuses a trailing `-`, and — the general fix —
+requires every model-supplied name to **resolve to a package that exists on
+this system**, checked against the local dpkg database and then `apt-cache
+show` with an exact `Package:` match (`policy.require_known_packages`, on by
+default). A regex that expands to other packages does not match itself, so it
+is refused; an invented name is refused; a genuine fix always names a real
+package. `aptcmd` re-applies the same pattern immediately before building argv,
+so the guarantee survives a future refactor of the policy.
 
 ### 3. Boot-critical packages cannot be removed
 
@@ -75,9 +90,21 @@ one: `autoremove` would take the package later.
 
 Independently of anything the model said, every destructive apt operation is
 first run with `-s` and the resulting plan is parsed
-(`aptai/executor.py:_review_simulation`). The operation is abandoned when the
-plan removes a protected package, removes more packages than the configured
-ceiling, or downgrades packages without `policy.allow_downgrade`.
+(`aptai/executor.py:_review_simulation`). The operation is abandoned when:
+
+* the simulation output could not be parsed at all — an unknown plan is never
+  executed;
+* the plan removes a protected package;
+* it removes more packages than the configured ceiling — and for `apt_install`
+  and `apt_reinstall` that ceiling is **zero**, so an install that resolves
+  into a removal always escalates instead of proceeding;
+* it installs more than `policy.max_new_installs` new packages;
+* it downgrades packages without `policy.allow_downgrade`.
+
+Purges (`Purg` lines) count as removals, and a missing dpkg database is fatal
+to all of it: if `dpkg-query` could not be read, `protected_reason` returns a
+refusal for *every* package, so nothing is removed at all. Failing closed here
+is deliberate — without the database, nothing can be shown to be safe.
 
 This is the check that catches the realistic failure: an innocuous-looking
 `apt_install` whose dependency resolution cascades into removing half the
@@ -92,7 +119,15 @@ cannot touch dpkg state at all. A failing `full-upgrade` is a dpkg problem, so
 it cannot rewrite repository configuration. `autoclean` can only touch the
 package cache.
 
-### 6. Secrets are not uploaded
+### 6. A partial `apt-get update` is not a success
+
+apt exits 0 even when individual repositories fail to refresh, which would let
+a machine upgrade against a stale — possibly stale *security* — index and
+report success. `apt.fail_on_partial_update` (on by default) scans the
+untruncated output for `Err:`, `W: Failed to fetch`, `W: GPG error` and
+`W: Some index files failed to download` and fails the stage instead.
+
+### 7. Secrets are not uploaded
 
 `/etc/apt/auth.conf`, `/etc/apt/auth.conf.d/*`, `/root/.netrc`,
 `/etc/aptai/env` and `/etc/aptai/api_key` are on a refusal list and are never
@@ -104,7 +139,27 @@ Anthropic/Slack/GitHub/GitLab/AWS token shapes, `Bearer` tokens and
 Run `aptai diagnose` to see the exact payload, and `aptai diagnose --prompt`
 to see the full prompt. Nothing is uploaded that this command does not print.
 
-### 7. The loop terminates
+Two related paths carry the same filter. The run report on disk quotes the raw
+stdout/stderr of every apt command — where a private repository's credentials
+would appear — so it is redacted before it is written, at mode 0640. And the
+child environment handed to apt/dpkg is scrubbed of anything secret-shaped
+(`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_WEBHOOK`, `*_PASSWORD`, plus the explicit
+aptai names): systemd loads `/etc/aptai/env` into aptai's environment, and
+without that scrub the API key and webhook URLs would be visible to every
+maintainer script of every package being upgraded — third-party code running
+as root.
+
+### 8. A crash still pages you
+
+The stage loop is wrapped so that an unexpected exception still writes the run
+report and sends the notification before re-raising. Dying silently half way
+through an upgrade is the one outcome this tool exists to prevent, so the
+parsers are written to raise `PlanParseError` rather than anything else — a
+model answer of `{"seconds": 1e400}` is legal JSON that decodes to `inf`, and
+`int(inf)` raises `OverflowError`, which is exactly the kind of exception that
+would otherwise escape every handler.
+
+### 9. The loop terminates
 
 At most `general.max_rounds` (default 3) consult-and-remediate cycles per
 stage. An action whose signature was already attempted in this stage is
@@ -213,7 +268,10 @@ Especially interesting:
 
 * a way to make aptai execute anything outside the action vocabulary;
 * a package name, key id, keyserver, URI or path that passes validation and is
-  then interpreted as an option, a path outside `/etc/apt`, or shell syntax;
+  then interpreted as an option, an apt selector, a POSIX regex, a path outside
+  `/etc/apt`, or shell syntax;
+* an input that makes aptai raise instead of escalating, since a crash skips
+  both the run report and the page;
 * a way to remove, purge or auto-mark a protected, Essential or running-kernel
   package;
 * a credential shape that reaches the API or a webhook unredacted;

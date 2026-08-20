@@ -53,6 +53,11 @@ needrestart_mode = "l"
 #   "proceed"          -- do it anyway (protected packages are still refused)
 on_excessive_removals = "abort"
 max_upgrade_removals = 10
+
+# apt-get update exits 0 even when individual repositories could not be
+# refreshed. With this on, that counts as a stage failure, so a stale (possibly
+# stale *security*) index is noticed instead of silently upgrading against it.
+fail_on_partial_update = true
 max_autoremove_removals = 60
 
 # Reboot automatically when /var/run/reboot-required appears.  Off by default.
@@ -87,6 +92,16 @@ fallback_beta = "server-side-fallback-2026-07-01"
 max_actions_per_round = 6
 max_risk = "medium"        # low | medium | high
 max_removals = 5
+
+# Ceiling on how many new packages one advisor-proposed install may pull in.
+max_new_installs = 50
+
+# Require every package name the advisor proposes to resolve to a real package
+# on this system. This is what stops apt's own argument grammar being used
+# against the policy: "ufw-" is not a package, so apt-get would read it as
+# "remove ufw", and "linux-image." is not a package, so apt-get would expand it
+# as a POSIX regex across every kernel. Leave this on.
+require_known_packages = true
 
 allow_remove = true
 allow_purge = false
@@ -133,14 +148,16 @@ timeout = 30
 max_log_chars = 3000
 
 [notify.slack]
-# Either put the URL here, point webhook_url_file at a 0600 file, or export
-# APTAI_SLACK_WEBHOOK in /etc/aptai/env.
+# A webhook URL is a bearer credential: anyone holding it can post into the
+# channel. Prefer APTAI_SLACK_WEBHOOK in /etc/aptai/env (mode 0600) or
+# webhook_url_file; the inline form below is only as protected as this file.
 webhook_url = ""
 webhook_url_file = ""
 username = "aptai"
 icon_emoji = ":package:"
 
 [notify.mattermost]
+# As above: prefer APTAI_MATTERMOST_WEBHOOK in /etc/aptai/env.
 webhook_url = ""
 webhook_url_file = ""
 channel = ""

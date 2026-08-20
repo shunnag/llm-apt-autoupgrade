@@ -9,7 +9,7 @@ import os
 import sys
 
 from aptai import diagnostics as diag_mod
-from aptai.config import DEFAULT_CONFIG_PATH, Config, load_config
+from aptai.config import DEFAULT_CONFIG_PATH, Config, load_config, validate
 from aptai.errors import AptaiError, ConfigError
 from aptai.llm import ClaudeClient, build_user_prompt, vocabulary_text
 from aptai.logsetup import setup_logging
@@ -131,6 +131,9 @@ def _apply_overrides(config: Config, args: argparse.Namespace) -> None:
         config.general.max_rounds = max(0, args.max_rounds)
     if args.verbose:
         config.general.log_level = "DEBUG"
+    # load_config() validated the file; command line overrides have to face the
+    # same limits, or --max-rounds 500 would walk straight past them.
+    validate(config)
 
 
 # ------------------------------------------------------------------ commands
@@ -233,6 +236,8 @@ def cmd_show_policy(config: Config, args: argparse.Namespace) -> int:
     print(f"  max actions per round    {limits.max_actions_per_round}")
     print(f"  max risk accepted        {limits.max_risk}")
     print(f"  max packages removed     {limits.max_removals}")
+    print(f"  max new packages         {limits.max_new_installs} (per advisor install action)")
+    print(f"  require known packages   {limits.require_known_packages}")
     print(f"  removals during upgrade  {config.apt.max_upgrade_removals} "
           f"(on excess: {config.apt.on_excessive_removals})")
     print(f"  removals during autorm   {config.apt.max_autoremove_removals}")
@@ -240,12 +245,16 @@ def cmd_show_policy(config: Config, args: argparse.Namespace) -> int:
     print(f"  allow sources edit       {limits.allow_sources_edit}")
     print(f"  allow key import         {limits.allow_key_import}")
     print(f"  allow downgrade          {limits.allow_downgrade}")
+    print(f"  partial update fails     {config.apt.fail_on_partial_update}")
     print(f"  protected packages       {len(limits.protected_packages)} listed, "
           f"plus Essential/required and the running kernel")
     kernel = sorted(facts.running_kernel_packages())
     if kernel:
         print(f"  running kernel packages  {', '.join(kernel[:6])}"
               f"{' ...' if len(kernel) > 6 else ''}")
+    if not facts.collected:
+        print("\n  WARNING: the dpkg database could not be read on this machine, so aptai")
+        print("           cannot verify Essential status. Every removal will be refused.")
     unsafe = [p for p in ("libc6", "systemd", "apt", "dpkg") if not policy.protected_reason(p)]
     if unsafe:
         print(f"  WARNING: not protected:  {', '.join(unsafe)}")

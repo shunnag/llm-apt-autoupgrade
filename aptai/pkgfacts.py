@@ -57,7 +57,9 @@ class PackageFacts:
             ],
             timeout=timeout,
         )
-        if not result.ok and not result.stdout:
+        if not result.ok:
+            # A partial or failed dpkg-query must not look like an empty but
+            # healthy system: the policy fails closed on collected=False.
             return facts
         for line in result.stdout.splitlines():
             parts = line.split("\t")
@@ -72,7 +74,9 @@ class PackageFacts:
                 status=status.strip(),
                 version=version.strip(),
             )
-        facts.collected = True
+        # A dpkg database with a handful of entries is a corrupt one, not a
+        # minimal install: even debootstrap --variant=minbase gives ~100.
+        facts.collected = len(facts.packages) >= 20
         return facts
 
     def info(self, package: str) -> PackageInfo | None:
