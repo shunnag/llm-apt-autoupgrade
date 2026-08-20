@@ -27,7 +27,7 @@ for arg in "$@"; do
     esac
 done
 
-SRC="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+SRC="$(unset CDPATH; cd -- "$(dirname -- "$0")/.." && pwd)"
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 

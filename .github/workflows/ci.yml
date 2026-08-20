@@ -20,8 +20,8 @@ jobs:
         # Debian 13, which are the targets.
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: no third-party imports
@@ -56,7 +56,7 @@ jobs:
     name: shell and unit files
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: shellcheck
         run: |
           sudo apt-get update -qq
@@ -81,7 +81,7 @@ jobs:
         run: |
           apt-get update -qq
           apt-get install -y -qq python3 ca-certificates
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: install
         run: ./scripts/install.sh
       - name: smoke test

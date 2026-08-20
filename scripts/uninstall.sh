@@ -18,7 +18,9 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl stop aptai.service 2>/dev/null || true
 fi
 rm -f "$UNITDIR/aptai.service" "$UNITDIR/aptai.timer"
-command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
 
 rm -f "$PREFIX/bin/aptai"
 rm -rf "$PREFIX/lib/aptai"
