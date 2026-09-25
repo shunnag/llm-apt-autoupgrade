@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The default model is now `claude-opus-5-5` (was `claude-opus-5`). The request
+  shape is unchanged: thinking is left at its always-on adaptive default,
+  `effort` stays explicitly `high` (the API default on this model is `medium`),
+  and refusal fallbacks keep using `fallbacks: "default"`. Set
+  `llm.model = "claude-opus-5"` to stay on the previous model.
+
 ## [0.1.0] — 2026-08-20
 
 First release.

@@ -5,7 +5,7 @@
 [![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](#動作環境)
 
 `apt update` → `apt full-upgrade` → `apt autoremove` を無人で実行し、**途中でエラーが起きたら
-Claude（既定は Opus 5）に相談して復旧を試みる** Debian / Ubuntu 向けのツールです。
+Claude（既定は Opus 5.5）に相談して復旧を試みる** Debian / Ubuntu 向けのツールです。
 3 往復まで自動で復旧を試み、それでもダメなら Slack / Mattermost に経緯のログ付きで通知します。
 
 *English: [README.en.md](README.en.md)*
@@ -297,7 +297,7 @@ max_upgrade_removals = 10
 reboot_if_required = false
 
 [llm]
-model = "claude-opus-5"
+model = "claude-opus-5-5"
 effort = "high"      # low | medium | high | xhigh | max
 
 [policy]

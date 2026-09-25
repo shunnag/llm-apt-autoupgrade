@@ -21,12 +21,12 @@ class TestLoadConfig(unittest.TestCase):
         config = load_config("/nonexistent/aptai/does-not-exist.toml") if False else Config()
         self.assertEqual("auto", config.general.mode)
         self.assertEqual(3, config.general.max_rounds)
-        self.assertEqual("claude-opus-5", config.llm.model)
+        self.assertEqual("claude-opus-5-5", config.llm.model)
 
     def test_reads_a_valid_file(self):
         path = self._write(
             "[general]\nmode = \"suggest\"\nmax_rounds = 2\n\n"
-            "[llm]\nmodel = \"claude-opus-5\"\neffort = \"xhigh\"\n\n"
+            "[llm]\nmodel = \"claude-opus-5-5\"\neffort = \"xhigh\"\n\n"
             "[notify.slack]\nwebhook_url = \"https://hooks.slack.com/services/A/B/C\"\n"
         )
         config = load_config(path)

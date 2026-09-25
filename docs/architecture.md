@@ -136,7 +136,7 @@ tests run anywhere in milliseconds without root, apt or network.
 | `test_executor.py` | the simulation gate; path/symlink handling; the key-mention and host-mention injection guards |
 | `test_plan.py` | schema/parse shape; unknown actions rejected; the schema enum tracks the stage vocabulary |
 | `test_aptcmd.py` | `apt-get -s` parsing against real output shapes; argv construction |
-| `test_llm.py` | request shape for `claude-opus-5`; 400 degradation; retries; refusal handling |
+| `test_llm.py` | request shape for `claude-opus-5-5`; 400 degradation; retries; refusal handling |
 | `test_config.py` | unknown keys and wrong types are hard errors; secret file modes |
 | `test_redact.py` | credential shapes are masked; ordinary apt output is not |
 | `test_notify.py` | Slack/Mattermost payloads; delivery failures are reported, not raised |
@@ -147,10 +147,12 @@ tests run anywhere in milliseconds without root, apt or network.
 ## Claude API specifics
 
 `llm.ClaudeClient.build_request` is the only place the request body is
-assembled. For `claude-opus-5`:
+assembled. For `claude-opus-5-5`:
 
-* `thinking` is **omitted** — adaptive thinking is the default on this model,
-  and `budget_tokens` is rejected with a 400.
+* `thinking` is **omitted** — adaptive thinking is always on for this model;
+  both `{"type": "disabled"}` and `budget_tokens` are rejected with a 400.
+* `effort` is sent explicitly. The API default on this model is `medium`, one
+  level below Opus 5's `high`, so leaving it out would quietly think less.
 * `output_config` carries `effort` and `format` as siblings; `format` is
   `{"type": "json_schema", "schema": ...}` with the enum restricted to the
   current stage.
