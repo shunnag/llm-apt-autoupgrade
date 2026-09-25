@@ -6,7 +6,7 @@
 
 `apt update` → `apt full-upgrade` → `apt autoremove`, unattended. When a stage
 fails, aptai sends the captured output and a redacted host diagnosis to the
-Claude API (Opus 5 by default), gets back a plan, applies what survives its
+Claude API (Opus 5.5 by default), gets back a plan, applies what survives its
 local safety policy, and retries — up to three rounds. If it still fails, it
 pages you on Slack or Mattermost with the full history.
 
@@ -249,7 +249,7 @@ max_upgrade_removals = 10
 reboot_if_required = false
 
 [llm]
-model = "claude-opus-5"
+model = "claude-opus-5-5"
 effort = "high"      # low | medium | high | xhigh | max
 
 [policy]

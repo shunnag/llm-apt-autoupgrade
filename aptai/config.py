@@ -88,7 +88,7 @@ class AptConfig:
 class LLMConfig:
     enabled: bool = True
     base_url: str = "https://api.anthropic.com"
-    model: str = "claude-opus-5"
+    model: str = "claude-opus-5-5"
     api_version: str = "2023-06-01"
     api_key_env: str = "ANTHROPIC_API_KEY"
     api_key_file: str = "/etc/aptai/api_key"

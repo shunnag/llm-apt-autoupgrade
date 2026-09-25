@@ -22,7 +22,7 @@ GOOD_PLAN = {
 }
 
 
-def api_response(text: str, *, stop_reason: str = "end_turn", model: str = "claude-opus-5") -> dict:
+def api_response(text: str, *, stop_reason: str = "end_turn", model: str = "claude-opus-5-5") -> dict:
     return {
         "id": "msg_test",
         "model": model,
@@ -62,9 +62,9 @@ class TestBuildRequest(unittest.TestCase):
         body = self.client.build_request(
             "prompt", self.allowed, use_structured=True, use_effort=True, use_fallbacks=True
         )
-        self.assertEqual("claude-opus-5", body["model"])
+        self.assertEqual("claude-opus-5-5", body["model"])
         self.assertEqual(16000, body["max_tokens"])
-        # Opus 5 runs adaptive thinking by default; budget_tokens is a 400.
+        # Opus 5.5 always runs adaptive thinking; "disabled" and budget_tokens are a 400.
         self.assertNotIn("thinking", body)
         self.assertEqual("high", body["output_config"]["effort"])
         self.assertEqual("json_schema", body["output_config"]["format"]["type"])

@@ -226,7 +226,7 @@ class ClaudeClient:
         if not self.api_key:
             return False, f"no API key in ${self.llm.api_key_env} or {self.llm.api_key_file}"
         body = {
-            # Adaptive thinking is on by default on this model and its tokens
+            # Adaptive thinking is always on for this model and its tokens
             # count against max_tokens, so a 64-token cap would come back
             # truncated with no text block at all.
             "model": self.llm.model,
